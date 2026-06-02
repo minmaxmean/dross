@@ -36,6 +36,27 @@ func Run(ctx context.Context, model model.LLM) {
 		log.Println("WARNING: TELEGRAM_ALLOWED_USERS is empty. Nobody will be able to talk to the bot.")
 	}
 
+	handler, err := NewHandler(model, allowedUsers)
+	if err != nil {
+		log.Fatalf("failed to create telegram handler: %v", err)
+	}
+
+	// 3. Initialize Telegram Bot client
+	opts := []bot.Option{
+		bot.WithDefaultHandler(handler),
+	}
+
+	b, err := bot.New(token, opts...)
+	if err != nil {
+		log.Fatalf("failed to initialize telegram bot: %v", err)
+	}
+
+	log.Println("Telegram bot initialized successfully. Starting polling loop...")
+	b.Start(ctx)
+}
+
+// NewHandler creates and configures the ADK Agent, session runner, and returns the Telegram update handler.
+func NewHandler(model model.LLM, allowedUsers string) (func(context.Context, *bot.Bot, *models.Update), error) {
 	// 1. Initialize the ADK Agent
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "dross_assistant",
@@ -44,7 +65,7 @@ func Run(ctx context.Context, model model.LLM) {
 		Instruction: "You are Dross, a helpful, intelligent personal assistant. Keep your answers clear, elegant, and concise. Format your answers in Markdown when appropriate.",
 	})
 	if err != nil {
-		log.Fatalf("failed to create agent: %v", err)
+		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
 
 	// 2. Initialize in-memory session service and runner
@@ -56,7 +77,7 @@ func Run(ctx context.Context, model model.LLM) {
 		AutoCreateSession: true,
 	})
 	if err != nil {
-		log.Fatalf("failed to create runner: %v", err)
+		return nil, fmt.Errorf("failed to create runner: %w", err)
 	}
 
 	h := &telegramHandler{
@@ -64,18 +85,7 @@ func Run(ctx context.Context, model model.LLM) {
 		allowedUsers: allowedUsers,
 	}
 
-	// 3. Initialize Telegram Bot client
-	opts := []bot.Option{
-		bot.WithDefaultHandler(h.handleUpdate),
-	}
-
-	b, err := bot.New(token, opts...)
-	if err != nil {
-		log.Fatalf("failed to initialize telegram bot: %v", err)
-	}
-
-	log.Println("Telegram bot initialized successfully. Starting polling loop...")
-	b.Start(ctx)
+	return h.handleUpdate, nil
 }
 
 func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -94,12 +104,12 @@ func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *
 			userID, msg.From.Username, msg.From.FirstName, msg.From.LastName, chatID)
 
 		// Send helpful reply so the user can easily copy their ID
-		deniedText := fmt.Sprintf("❌ *Access Denied*\nYour Telegram User ID is: `%d`\nAdd this ID to `TELEGRAM_ALLOWED_USERS` in your `.env` file to authorize access.", userID)
+		deniedText := fmt.Sprintf("❌ <b>Access Denied</b>\nYour Telegram User ID is: <code>%d</code>\nAdd this ID to <code>TELEGRAM_ALLOWED_USERS</code> in your env file to authorize access.", userID)
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:          chatID,
 			MessageThreadID: threadID,
 			Text:            deniedText,
-			ParseMode:       models.ParseModeMarkdown,
+			ParseMode:       models.ParseModeHTML,
 		})
 		if err != nil {
 			log.Printf("failed to send unauthorized reply: %v", err)
@@ -129,7 +139,6 @@ func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *
 		MessageThreadID: threadID,
 		DraftID:         draftID,
 		Text:            "Thinking...",
-		ParseMode:       models.ParseModeMarkdown,
 	})
 
 	var accumulatedText strings.Builder
@@ -162,7 +171,6 @@ func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *
 						MessageThreadID: threadID,
 						DraftID:         draftID,
 						Text:            accumulatedText.String(),
-						ParseMode:       models.ParseModeMarkdown,
 					})
 					lastUpdate = now
 				}
@@ -180,7 +188,6 @@ func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *
 					ChatID:          chatID,
 					MessageThreadID: threadID,
 					Text:            finalText,
-					ParseMode:       models.ParseModeMarkdown,
 				})
 				if err != nil {
 					return err
@@ -195,8 +202,7 @@ func (h *telegramHandler) handleUpdate(ctx context.Context, b *bot.Bot, update *
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:          chatID,
 			MessageThreadID: threadID,
-			Text:            fmt.Sprintf("⚠️ *Error:* Failed to generate response: %v", err),
-			ParseMode:       models.ParseModeMarkdown,
+			Text:            fmt.Sprintf("⚠️ Error: Failed to generate response: %v", err),
 		})
 	}
 }

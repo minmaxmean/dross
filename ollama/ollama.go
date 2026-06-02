@@ -84,6 +84,7 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 		// 3. Perform Streaming Call
 		if stream {
+			var stopped bool
 			err := m.client.Chat(ctx, chatReq, func(resp api.ChatResponse) error {
 				llmResp := &model.LLMResponse{
 					Content: &genai.Content{
@@ -96,11 +97,12 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 					TurnComplete: resp.Done,
 				}
 				if !yield(llmResp, nil) {
+					stopped = true
 					return fmt.Errorf("consumer stopped yielding")
 				}
 				return nil
 			})
-			if err != nil {
+			if err != nil && !stopped {
 				yield(nil, err)
 			}
 			return
